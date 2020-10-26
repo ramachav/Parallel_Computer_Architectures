@@ -30,3 +30,6 @@
 *.exe
 *.out
 *.app
+
+MESI_Last_Touch_Prediction/LTP_Final/m5out
+MESI_Last_Touch_Prediction/LTP_Baseline/m5out
