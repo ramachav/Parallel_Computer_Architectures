@@ -1,0 +1,194 @@
+divert(-1)
+
+define(PARMACS_COMMENT, `')
+
+define(PARMACS_COPYRIGHT_DISCLAIMER,`
+/*
+ * c.m4.pthreads
+ * Description: Implementation of PARMACS macros based on the pthreads library
+ * Barcelona, 1996
+ * Copyright (c) 1996-1999 by GSOMK DAC-UPC. All Rights Reserved.
+ * GSOMK team at Department of Computer Architecture, UPC.
+ * gsomk@ac.upc.es
+ * File created: 1996 ernest@ac.upc.es (E.Artiaga)
+ * History:
+ * Last update: 1999/06 ernest@ac.upc.es (E.Artiaga)
+ *
+ * The Polytechnic University of Catalonia (UPC) and the authors disclaim
+ * all warranties with regard to this software, including all implied
+ * warranties of merchantability and fitness.
+ * In no event shall the Polytechnic University of Catalonia (UPC) or the
+ * authors be liable for any special, indirect or consequential damages or
+ * any damages whatsoever resulting from loss of use, data or profits,
+ * whether in an action of contract, negligence or other tortius action,
+ * arising out of or in connection with the use or performance of this
+ * software.
+ *
+ * Permission to use, copy, modify, and distribute this software for
+ * any purpose and without fee is hereby granted, provided that the above
+ * copyright notice and disclaimer, and also this permission notice, appear
+ * in all copies.
+ *
+ */
+')
+
+define(PARMACS_COMMON_INCLUDES, `
+#ifndef _PARMACS_COMMON_INCLUDES_
+#define _PARMACS_COMMON_INCLUDES_
+
+#include <pthread.h>
+#include <parmacs_config.h>
+#include <parmacs_types.h>
+#include <parmacs_decl.h>
+#include <parmacs.h>
+
+#endif /* _PARMACS_COMMON_INCLUDES_ */
+')
+
+define(NEWPROC,) dnl
+
+define(BARDEC, `parmacs_barrier_t ($1);')
+define(BARINIT, `{
+    _parmacs_barinit(&($1));
+}')
+define(BARRIER, `{
+    _parmacs_barrier(($1), ($2));
+}')
+
+define(GSDEC, `parmacs_global_t ($1);')
+define(GSINIT, `{
+    _parmacs_gsinit(&($1));
+}')
+define(GETSUB, `{
+    _parmacs_getsub(($1), &($2), ($3), ($4)); 
+}')
+
+define(NU_GSDEC, `parmacs_global_t ($1);')
+define(NU_GSINIT, `GSINIT($1)')
+define(NU_GETSUB, `GETSUB($1,$2,$3,$4)')
+
+define(ADEC, `int ($1);')
+define(AINIT, `{;}')
+define(PROBEND, `{;}')
+
+define(LOCKDEC, `parmacs_lock_t ($1);')
+define(LOCKINIT, `{
+    _parmacs_lockinit(&($1));
+}')
+define(LOCK, `{
+    _parmacs_lock($1);
+}')
+define(UNLOCK, `{
+    _parmacs_unlock($1);
+}')
+
+define(NLOCKDEC, `int ($1);')
+define(NLOCKINIT, `{;}')
+define(NLOCK, `{;}')
+define(NUNLOCK, `{;}')
+
+define(ALOCKDEC, `parmacs_lock_t ($1);')
+define(ALOCKINIT, `{
+    _parmacs_alockinit(&($1), ($2));
+}')
+define(ALOCK, `{
+    _parmacs_alock(($1), ($2));
+}')
+define(AULOCK, `{
+    _parmacs_aulock(($1), ($2));
+}')
+
+define(PAUSEDEC, `parmacs_event_t ($1);')
+define(PAUSEINIT, `{
+    register int _parmacs_m4_count_ = ifelse(`', $2, 1, ($2));
+    _parmacs_pauseinit(&($1), _parmacs_m4_count_);
+}')
+define(CLEARPAUSE, `{
+    register int _parmacs_m4_which_ = ifelse(`', $2, 0, ($2));
+    _parmacs_clearpause(($1), _parmacs_m4_which_);
+}')
+define(SETPAUSE, `{
+    register int _parmacs_m4_which_ = ifelse(`', $2, 0, ($2));
+    _parmacs_setpause(($1), _parmacs_m4_which_);
+}')
+define(EVENT, `{
+    register int _parmacs_m4_which_ = ifelse(`', $2, 0, ($2));
+    _parmacs_event(($1), _parmacs_m4_which_);
+}')
+define(WAITPAUSE, `{
+    register int _parmacs_m4_which_ = ifelse(`', $2, 0, ($2));
+    _parmacs_waitpause(($1), _parmacs_m4_which_);
+}')
+define(PAUSE, `{
+    register int _parmacs_m4_which_ = ifelse(`', $2, 0, ($2));
+    _parmacs_pause(($1), _parmacs_m4_which_);
+}')
+
+define(AUG_ON, ` ')
+define(AUG_OFF, ` ')
+define(TRACE_ON, ` ')
+define(TRACE_OFF, ` ')
+define(REF_TRACE_ON, ` ')
+define(REF_TRACE_OFF, ` ')
+define(DYN_TRACE_ON, `;')
+define(DYN_TRACE_OFF, `;')
+define(DYN_REF_TRACE_ON, `;')
+define(DYN_REF_TRACE_OFF, `;')
+define(DYN_SIM_ON, `;')
+define(DYN_SIM_OFF, `;')
+define(DYN_SCHED_ON, `;')
+define(DYN_SCHED_OFF, `;')
+define(AUG_SET_LOLIMIT, `;')
+define(AUG_SET_HILIMIT, `;')
+
+define(MENTER, `{;}')
+define(DELAY, `{;}')
+define(CONTINUE, `{;}')
+define(MEXIT, `{;}')
+define(MONINIT, `{;}')
+
+define(WAIT_FOR_END, `{
+    _parmacs_wait_for_end($1);
+}')
+
+define(CREATE, `{
+    _parmacs_create($1);
+}')
+
+define(MAIN_INITENV, `{
+    register unsigned long int _parmacs_m4_memory_;
+    
+    _parmacs_m4_memory_ = (unsigned long int)(
+      ifelse(`',$2,PARMACS_SHARED_MEMORY,($2))
+    );
+    _parmacs_main_initenv(_parmacs_m4_memory_);
+}')
+define(MAIN_END, `{
+    _parmacs_main_end();
+}')
+
+define(MAIN_ENV,`
+PARMACS_COMMON_INCLUDES
+')
+
+define(ENV, ` ')
+
+define(EXTERN_ENV, `
+PARMACS_COMMON_INCLUDES
+')
+
+define(G_MALLOC, `_parmacs_memory_alloc((int)($1));')
+define(G_FREE, `_parmacs_memory_free((void *(($1));')
+define(G_MALLOC_F, `_parmacs_memory_alloc((int)($1))')
+define(NU_MALLOC, `_parmacs_memory_alloc((int)($1));')
+define(NU_FREE, `_parmacs_memory_free((void *)($1));')
+define(NU_MALLOC_F, `_parmacs_memory_alloc((int)($1))')
+
+define(GET_HOME, `{($1) = 0;}')
+define(GET_PID, `{($1) = _parmacs_getpid();}')
+define(AUG_DELAY, `{sleep ($1);}')
+define(ST_LOG, `{;}')
+define(SET_HOME, `{;}')
+define(CLOCK, `{($1) = _parmacs_clock();}')
+
+divert(0)

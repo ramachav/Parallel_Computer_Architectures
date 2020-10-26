@@ -1,0 +1,6 @@
+protocol "MSI_example";
+include "RubySlicc_interfaces.slicc";
+include "MSI_example-msg.sm";
+include "MSI_example-cache.sm";
+include "MSI_example-dir.sm";
+include "MSI_example-dma.sm";

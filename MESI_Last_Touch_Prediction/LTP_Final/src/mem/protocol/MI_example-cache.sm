@@ -1,0 +1,631 @@
+/*
+ * Copyright (c) 2009-2012 Mark D. Hill and David A. Wood
+ * Copyright (c) 2010-2012 Advanced Micro Devices, Inc.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met: redistributions of source code must retain the above copyright
+ * notice, this list of conditions and the following disclaimer;
+ * redistributions in binary form must reproduce the above copyright
+ * notice, this list of conditions and the following disclaimer in the
+ * documentation and/or other materials provided with the distribution;
+ * neither the name of the copyright holders nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+machine(MachineType:L1Cache, "MSI Example L1 Cache")
+    : Sequencer * sequencer;
+      CacheMemory * cacheMemory;
+      bool send_evictions;
+      Cycles cache_response_latency := 12;
+      Cycles issue_latency := 2;
+
+      //NETWORK BUFFERS
+      
+      //requestToCache = requestFromCache
+      MessageBuffer * requestToCache, network="To", virtual_network="2", vnet_type="request";
+      
+      //responseToCache = responseFromCache
+      MessageBuffer * responseToCache, network="To", virtual_network="4", vnet_type="response";
+
+      //forwardFromCache = forwardToCache
+      MessageBuffer * forwardFromCache, network="From", virtual_network="3", vnet_type="forward";
+
+      //responseFromCache = responseToCache
+      MessageBuffer * responseFromCache, network="From", virtual_network="4", vnet_type="response";
+
+      MessageBuffer * mandatoryQueue;
+{
+	//STATES
+	state_declaration(State, desc="Cache states") {
+
+	//Static I
+	I, AccessPermission:Invalid, desc="Not Present/Invalid";
+
+	//States moving out of I
+	IS_D, AccessPermission:Invalid, desc="Invalid, moving to S, waiting for data";
+    	IM_AD, AccessPermission:Invalid, desc="Invalid, moving to M, waiting for acks and data";
+    	IM_A, AccessPermission:Busy, desc="Invalid, moving to M, waiting for acks";
+	II_A, AccessPermission:Invalid, desc="Send valid data before receiving put ack, waiting for put ack";
+	
+	//Static S
+	S, AccessPermission:Read_Only, desc="Shared. Read-only, other caches may have the block";
+
+	//States moving out of S
+	SM_AD, AccessPermission:Read_Only, desc="Shared, moving to M, waiting for acks and 'data'";
+	SM_A, AccessPermission:Read_Only, desc="Shared, moving to M, waiting for acks";
+	SI_A, AccessPermission:Busy, desc="Was shared, moving to I, waiting for put ack";
+
+	//Static M
+	M, AccessPermission:Read_Write, desc="Modified. Read & Write permissions. Owner of block.";
+
+	//States moving out of M
+	MI_A, AccessPermission:Busy, desc="Was modified, moving to I, waiting for put ack";
+	//M->S is not an intermediate state
+      	}
+
+	//EVENTS
+	enumeration(Event, desc="Cache events") {
+
+	//From the processor/sequencer/mandatoryqueue
+	Load,		 desc="Load request from processor";
+	Store, 	   	 desc="Store request from processor";
+	
+	//Internal event (only triggered from processor requests)
+	Replacement,	 desc="Triggered when block is chosen as a victim";
+
+	//Forwarded request from another cache via directory on the forward network
+	FwdGetS,    	 desc="Directory sent us a request to satisfy GetS. We must have the block in M to respond to this.";
+    	FwdGetM,         desc="Directory sent us a request to satisfy GetM. We must have the block in M to respond to this.";
+	Inv,		 desc="Invalidate from the driectory.";
+	PutAck, 	 desc="Response from directory after we issue a put. This must be on the fwd network to avoid deadlock.";
+
+	//Responses from the directory
+	DataDirNoAcks,	 desc="Data from directory (acks = 0)";
+	DataDirAcks,	 desc="Data from directory (acks > 0)";
+
+	//Responses from other caches
+	DataOwner,  	 desc="Data from owner";
+	InvAck,		 desc="Invalidation ack from another cache after Inv";
+
+	//Special event to simplify implementation
+	LastInvAck, 	 desc="Triggered after the last ack is received.";
+	}
+
+	//STRUCTURE DEFINITIONS
+	//Cache Entry
+	structure(Entry, desc="Cache Entry", interface="AbstractCacheEntry") {
+	State CacheState,      desc="Cache state";
+	DataBlock DataBlk,     desc="Data in the block";
+	bool Dirty,	       desc="Is the data dirty (different than memory)?";
+	}
+
+	//TBE fields
+	structure(TBE, desc="Entry for transient requests") {
+    	State TBEState,         desc="Transient state of block";
+    	DataBlock DataBlk,      desc="Data for the block. Needed for MI_A (concurrent writebacks)";
+    	int AcksOutstanding, default=0, desc="Number of acks left to receive.";
+	}
+
+	structure(TBETable, external="yes") {
+  	TBE lookup(Addr);
+  	void allocate(Addr);
+	void deallocate(Addr);
+	bool isPresent(Addr);
+	}
+
+	//STRUCTURES
+	TBETable TBEs, template="<L1Cache_TBE>", constructor="m_number_of_TBEs";
+
+	//PROTOTYPES
+	Tick clockEdge();
+	Cycles ticksToCycles(Tick t);
+	void set_cache_entry(AbstractCacheEntry a);
+  	void unset_cache_entry();
+  	void set_tbe(TBE b);
+  	void unset_tbe();
+  	void profileMsgDelay(int virtualNetworkType, Cycles b);
+       	MachineID mapAddressToMachine(Addr addr, MachineType mtype);
+	
+	// Convenience function to look up the cache entry.
+	// Needs a pointer so it will be a reference and can be updated in actions
+	
+  	Entry getCacheEntry(Addr address), return_by_pointer="yes" {
+    	  return static_cast(Entry, "pointer", cacheMemory.lookup(address));
+ 	}
+
+	//FUNCTIONS
+	//Event mandatory_request_type_to_event(RubyRequestType type) {
+   	//if (type == RubyRequestType:LD) {
+      	  //return Event:Load;
+    	//} else if (type == RubyRequestType:IFETCH) {
+      	  //return Event:Ifetch;
+    	//} else if ((type == RubyRequestType:ST) || (type == RubyRequestType:ATOMIC)) {
+      	  //return Event:Store;
+        //} else {
+          //error("Invalid RubyRequestType");
+        //}
+        //}
+
+	State getState(TBE tbe, Entry cache_entry, Addr addr) {
+    	      // The TBE state will override the state in cache memory, if valid
+    	if (is_valid(tbe)) { return tbe.TBEState; }
+    	      // Next, if the cache entry is valid, it holds the state
+    	else if (is_valid(cache_entry)) { return cache_entry.CacheState; }
+    	      // If the block isn't present, then it's state must be I.
+    	else { return State:I; }
+	}
+
+	void setState(TBE tbe, Entry cache_entry, Addr addr, State state) {
+  	if (is_valid(tbe)) { tbe.TBEState := state; }
+  	if (is_valid(cache_entry)) { cache_entry.CacheState := state; }
+	}
+
+	AccessPermission getAccessPermission(Addr addr) {
+    	TBE tbe := TBEs[addr];
+    	if(is_valid(tbe)) { return L1Cache_State_to_permission(tbe.TBEState); }
+
+    	Entry cache_entry := getCacheEntry(addr);
+    	if(is_valid(cache_entry)) { return L1Cache_State_to_permission(cache_entry.CacheState); }
+
+    	return AccessPermission:NotPresent;
+  	}
+
+  	void setAccessPermission(Entry cache_entry, Addr addr, State state) {
+    	if (is_valid(cache_entry)) { cache_entry.changePermission(L1Cache_State_to_permission(state)); }
+  	}
+
+  	void functionalRead(Addr addr, Packet *pkt) {
+    	TBE tbe := TBEs[addr];
+    	if(is_valid(tbe)) { testAndRead(addr, tbe.DataBlk, pkt); }
+	else { testAndRead(addr, getCacheEntry(addr).DataBlk, pkt); }
+  	}
+
+  	int functionalWrite(Addr addr, Packet *pkt) {
+    	int num_functional_writes := 0;
+
+    	TBE tbe := TBEs[addr];
+    	if(is_valid(tbe)) {
+      	num_functional_writes := num_functional_writes + testAndWrite(addr, tbe.DataBlk, pkt);
+      	return num_functional_writes;
+    	}
+
+    	num_functional_writes := num_functional_writes + testAndWrite(addr, getCacheEntry(addr).DataBlk, pkt);
+    	return num_functional_writes;
+  	}
+
+	// NETWORK PORTS
+
+  	out_port(requestNetwork_out, RequestMsg, requestToCache);
+  	out_port(responseNetwork_out, ResponseMsg, responseToCache);
+
+	in_port(responseNetwork_in, ResponseMsg, responseFromCache) {
+    	if (responseNetwork_in.isReady(clockEdge())) {
+           peek(responseNetwork_in, ResponseMsg) {
+            	Entry cache_entry := getCacheEntry(in_msg.addr);
+            	TBE tbe := TBEs[in_msg.addr];
+            	assert(is_valid(tbe));
+
+            	if (machineIDToMachineType(in_msg.Sender) == MachineType:Directory) {
+                    if (in_msg.Type != CoherenceResponseType:Data) {
+                       error("Directory should only reply with data");
+                    }
+                    assert(in_msg.Acks + tbe.AcksOutstanding >= 0);
+                    if (in_msg.Acks + tbe.AcksOutstanding == 0) {
+                       trigger(Event:DataDirNoAcks, in_msg.addr, cache_entry, tbe);
+                    } else {
+                       trigger(Event:DataDirAcks, in_msg.addr, cache_entry, tbe);
+                    }
+            	} else {
+                    if (in_msg.Type == CoherenceResponseType:Data) {
+                       trigger(Event:DataOwner, in_msg.addr, cache_entry, tbe);
+                    } else if (in_msg.Type == CoherenceResponseType:InvAck) {
+                       DPRINTF(RubySlicc, "Got inv ack. %d left\n", tbe.AcksOutstanding);
+                       if (tbe.AcksOutstanding == 1) {
+                          trigger(Event:LastInvAck, in_msg.addr, cache_entry, tbe);
+                       } else {
+                       	  trigger(Event:InvAck, in_msg.addr, cache_entry, tbe);
+                       }
+                    } else {
+                       error("Unexpected response from other cache");
+                    }
+            	}
+           }
+        }
+	}
+
+	in_port(forwardNetwork_in, ResponseMsg, forwardFromCache) {
+	if (forwardNetwork_in.isReady(clockEdge())) {
+	    peek(forwardNetwork_in, RequestMsg) {
+	        // Grab the entry and tbe if they exist.
+            	Entry cache_entry := getCacheEntry(in_msg.addr);
+            	TBE tbe := TBEs[in_msg.addr];
+
+            	if (in_msg.Type == CoherenceRequestType:GetS) {
+                    trigger(Event:FwdGetS, in_msg.addr, cache_entry, tbe);
+            	} else if (in_msg.Type == CoherenceRequestType:GetM) {
+                    trigger(Event:FwdGetM, in_msg.addr, cache_entry, tbe);
+            	} else if (in_msg.Type == CoherenceRequestType:Inv) {
+                    trigger(Event:Inv, in_msg.addr, cache_entry, tbe);
+            	} else if (in_msg.Type == CoherenceRequestType:PutAck) {
+                    trigger(Event:PutAck, in_msg.addr, cache_entry, tbe);
+            	} else {
+                    error("Unexpected forward message!");
+            	}
+      	    }
+    	}
+	}
+
+	in_port(mandatoryQueue_in, RubyRequest, mandatoryQueue) {
+    	if (mandatoryQueue_in.isReady(clockEdge())) {
+            peek(mandatoryQueue_in, RubyRequest, block_on="LineAddress") {
+            	Entry cache_entry := getCacheEntry(in_msg.LineAddress);
+            	TBE tbe := TBEs[in_msg.LineAddress];
+
+            	if (is_invalid(cache_entry) && cacheMemory.cacheAvail(in_msg.LineAddress) == false ) {
+                    Addr addr := cacheMemory.cacheProbe(in_msg.LineAddress);
+                    Entry victim_entry := getCacheEntry(addr);
+                    TBE victim_tbe := TBEs[addr];
+                    trigger(Event:Replacement, addr, victim_entry, victim_tbe);
+            	} else {
+                    if (in_msg.Type == RubyRequestType:LD || in_msg.Type == RubyRequestType:IFETCH) {
+                        trigger(Event:Load, in_msg.LineAddress, cache_entry, tbe);
+                    } else if (in_msg.Type == RubyRequestType:ST) {
+                        trigger(Event:Store, in_msg.LineAddress, cache_entry, tbe);
+                    } else {
+                        error("Unexpected type from processor");
+                    }
+            	}
+            }
+        }
+    	}
+
+	//ACTIONS
+
+	action(sendGetS, "gS", desc="Send GetS to the directory") {
+    	enqueue(requestNetwork_out, RequestMsg, issue_latency) {
+            out_msg.addr := address;
+            out_msg.Type := CoherenceRequestType:GetS;
+            out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
+            // See mem/protocol/RubySlicc_Exports.sm for possible sizes.
+            out_msg.MessageSize := MessageSizeType:Control;
+            // Set that the requestor is this machine so we get the response.
+            out_msg.Requestor := machineID;
+    	}
+	}
+
+	action(sendGetM, "gM", desc="Send GetM to the directory") {
+    	enqueue(requestNetwork_out, RequestMsg, issue_latency) {
+            out_msg.addr := address;
+            out_msg.Type := CoherenceRequestType:GetM;
+            out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
+            out_msg.MessageSize := MessageSizeType:Control;
+            out_msg.Requestor := machineID;
+        }
+	}
+
+	action(sendPutS, "pS", desc="Send PutS to the directory") {
+    	enqueue(requestNetwork_out, RequestMsg, issue_latency) {
+            out_msg.addr := address;
+            out_msg.Type := CoherenceRequestType:PutS;
+            out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
+            out_msg.MessageSize := MessageSizeType:Control;
+            out_msg.Requestor := machineID;
+        }
+ 	}
+
+	action(sendPutM, "pM", desc="Send putM+data to the directory") {
+    	enqueue(requestNetwork_out, RequestMsg, issue_latency) {
+            out_msg.addr := address;
+            out_msg.Type := CoherenceRequestType:PutM;
+            out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
+            out_msg.DataBlk := cache_entry.DataBlk;
+            out_msg.MessageSize := MessageSizeType:Data;
+            out_msg.Requestor := machineID;
+    	}
+	}
+
+	action(sendCacheDataToReq, "cdR", desc="Send cache data to requestor") {
+    	assert(is_valid(cache_entry));
+    	peek(forwardNetwork_in, RequestMsg) {
+            enqueue(responseNetwork_out, ResponseMsg, cache_response_latency) {
+                out_msg.addr := address;
+            	out_msg.Type := CoherenceResponseType:Data;
+            	out_msg.Destination.add(in_msg.Requestor);
+		out_msg.DataBlk := cache_entry.DataBlk;
+		out_msg.MessageSize := MessageSizeType:Data;
+		out_msg.Sender := machineID;
+	    }
+    	}
+	}
+
+	action(sendCacheDataToDir, "cdD", desc="Send the cache data to the directory") {
+    	enqueue(responseNetwork_out, ResponseMsg, cache_response_latency) {
+            out_msg.addr := address;
+            out_msg.Type := CoherenceResponseType:Data;
+            out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
+            out_msg.DataBlk := cache_entry.DataBlk;
+            out_msg.MessageSize := MessageSizeType:Data;
+            out_msg.Sender := machineID;
+    	}
+	}
+
+	action(sendInvAcktoReq, "iaR", desc="Send inv-ack to requestor") {
+    	peek(forwardNetwork_in, RequestMsg) {
+            enqueue(responseNetwork_out, ResponseMsg, cache_response_latency) {
+            	out_msg.addr := address;
+            	out_msg.Type := CoherenceResponseType:InvAck;
+            	out_msg.Destination.add(in_msg.Requestor);
+            	out_msg.DataBlk := cache_entry.DataBlk;
+            	out_msg.MessageSize := MessageSizeType:Control;
+            	out_msg.Sender := machineID;
+            }
+        }
+	}
+
+	action(decrAcks, "da", desc="Decrement the number of acks") {
+    	assert(is_valid(tbe));
+    	tbe.AcksOutstanding := tbe.AcksOutstanding - 1;
+    	APPEND_TRANSITION_COMMENT("Acks: ");
+    	APPEND_TRANSITION_COMMENT(tbe.AcksOutstanding);
+        }
+
+	action(storeAcks, "sa", desc="Store the needed acks to the TBE") {
+    	assert(is_valid(tbe));
+    	peek(responseNetwork_in, ResponseMsg) {
+            tbe.AcksOutstanding := in_msg.Acks + tbe.AcksOutstanding;
+    	}
+    	assert(tbe.AcksOutstanding > 0);
+	}
+
+	action(loadHit, "Lh", desc="Load hit") {
+    	assert(is_valid(cache_entry));
+    	cacheMemory.setMRU(cache_entry);
+    	sequencer.readCallback(address, cache_entry.DataBlk, false);
+	}
+
+	action(externalLoadHit, "xLh", desc="External load hit (was a miss)") {
+    	assert(is_valid(cache_entry));
+    	peek(responseNetwork_in, ResponseMsg) {
+            cacheMemory.setMRU(cache_entry);
+            // Forward the type of machine that responded to this request
+            // E.g., another cache or the directory. This is used for tracking
+       	    // statistics.
+            sequencer.readCallback(address, cache_entry.DataBlk, true, machineIDToMachineType(in_msg.Sender));
+    	}
+	}
+
+	action(storeHit, "Sh", desc="Store hit") {
+    	assert(is_valid(cache_entry));
+    	cacheMemory.setMRU(cache_entry);
+    	// The same as the read callback above.
+    	sequencer.writeCallback(address, cache_entry.DataBlk, false);
+	}
+
+	action(externalStoreHit, "xSh", desc="External store hit (was a miss)") {
+    	assert(is_valid(cache_entry));
+    	peek(responseNetwork_in, ResponseMsg) {
+            cacheMemory.setMRU(cache_entry);
+            sequencer.writeCallback(address, cache_entry.DataBlk, true, machineIDToMachineType(in_msg.Sender));
+	    // Note: this could be the last ack.
+    	}
+	}
+
+	action(forwardEviction, "e", desc="sends eviction notification to CPU") {
+    	if (send_evictions) {
+            sequencer.evictionCallback(address);
+    	}
+	}
+
+	action(allocateCacheBlock, "a", desc="Allocate a cache block") {
+    	assert(is_invalid(cache_entry));
+    	assert(cacheMemory.cacheAvail(address));
+    	set_cache_entry(cacheMemory.allocate(address, new Entry));
+	}
+
+	action(deallocateCacheBlock, "d", desc="Deallocate a cache block") {
+    	assert(is_valid(cache_entry));
+    	cacheMemory.deallocate(address);
+    	// clear the cache_entry variable (now it's invalid)
+    	unset_cache_entry();
+	}
+
+	action(writeDataToCache, "wd", desc="Write data to the cache") {
+    	peek(responseNetwork_in, ResponseMsg) {
+            assert(is_valid(cache_entry));
+            cache_entry.DataBlk := in_msg.DataBlk;
+    	}
+	}
+
+	action(allocateTBE, "aT", desc="Allocate TBE") {
+    	assert(is_invalid(tbe));
+    	TBEs.allocate(address);
+    	// this updates the tbe variable for other actions
+    	set_tbe(TBEs[address]);
+	}
+
+	action(deallocateTBE, "dT", desc="Deallocate TBE") {
+    	assert(is_valid(tbe));
+    	TBEs.deallocate(address);
+    	// this makes the tbe variable invalid
+    	unset_tbe();
+	}
+
+	action(copyDataFromCacheToTBE, "Dct", desc="Copy data from cache to TBE") {
+    	assert(is_valid(cache_entry));
+    	assert(is_valid(tbe));
+    	tbe.DataBlk := cache_entry.DataBlk;
+	}
+
+	action(popMandatoryQueue, "pQ", desc="Pop the mandatory queue") {
+    	mandatoryQueue_in.dequeue(clockEdge());
+	}
+
+	action(popResponseQueue, "pR", desc="Pop the response queue") {
+    	responseNetwork_in.dequeue(clockEdge());
+	}
+
+	action(popForwardQueue, "pF", desc="Pop the forward queue") {
+    	forwardNetwork_in.dequeue(clockEdge());
+	}
+
+	action(stall, "z", desc="Stall the incoming request") {
+    	// z_stall
+        }
+
+	//TRANSITIONS
+
+	transition(I, Load, IS_D) {
+    	allocateCacheBlock;
+    	allocateTBE;
+    	sendGetS;
+    	popMandatoryQueue;
+	}
+
+	transition(I, Store, IM_AD) {
+        allocateCacheBlock;
+        allocateTBE;
+        sendGetM;
+        popMandatoryQueue;
+    	}
+
+	transition(IS_D, {Load, Store, Replacement, Inv}) {
+    	stall;
+        }
+
+	transition(IS_D, {DataDirNoAcks, DataOwner}, S) {
+    	writeDataToCache;
+    	deallocateTBE;
+    	externalLoadHit;
+    	popResponseQueue;
+	}
+
+	transition({IM_AD, IM_A}, {Load, Store, Replacement, FwdGetS, FwdGetM}) {
+	stall;
+	}
+
+	transition({IM_AD, SM_AD}, {DataDirNoAcks, DataOwner}, M) {
+    	writeDataToCache;
+    	deallocateTBE;
+    	externalStoreHit;
+    	popResponseQueue;
+	}
+
+	transition(IM_AD, DataDirAcks, IM_A) {
+    	writeDataToCache;
+    	storeAcks;
+    	popResponseQueue;
+	}
+
+	transition({IM_AD, IM_A, SM_AD, SM_A}, InvAck) {
+    	decrAcks;
+    	popResponseQueue;
+	}
+
+	transition({IM_A, SM_A}, LastInvAck, M) {
+    	deallocateTBE;
+    	externalStoreHit;
+    	popResponseQueue;
+	}
+
+	transition({S, SM_AD, SM_A, M}, Load) {
+    	loadHit;
+    	popMandatoryQueue;
+	}
+
+	transition(S, Store, SM_AD) {
+    	allocateTBE;
+    	sendGetM;
+    	popMandatoryQueue;
+	}
+
+	transition(S, Replacement, SI_A) {
+	sendPutS;
+	forwardEviction;
+	}
+
+	transition(S, Inv, I) {
+	sendInvAcktoReq;
+	deallocateCacheBlock;
+	forwardEviction;
+	popForwardQueue;
+	}
+
+	transition({SM_AD, SM_A}, {Store, Replacement, FwdGetS, FwdGetM}) {
+	stall;
+	}
+
+	transition(SM_AD, Inv, IM_AD) {
+	sendInvAcktoReq;
+	forwardEviction;
+	popForwardQueue;
+	}
+
+	transition(SM_AD, DataDirAcks, SM_A) {
+	writeDataToCache;
+	storeAcks;
+	popResponseQueue;
+	}
+
+	transition(M, Store) {
+	storeHit;
+	popMandatoryQueue;
+	}
+
+	transition(M, Replacement, MI_A) {
+	sendPutM;
+	forwardEviction;
+	}
+
+	transition(M, FwdGetS, S) {
+	sendCacheDataToReq;
+	sendCacheDataToDir;
+	popForwardQueue;
+	}
+
+	transition(M, FwdGetM, I) {
+	sendCacheDataToReq;
+	deallocateCacheBlock;
+	popForwardQueue;
+	}
+
+	transition({MI_A, SI_A, II_A}, {Load, Store, Replacement}) {
+	stall;
+	}
+
+	transition(MI_A, FwdGetS, SI_A) {
+	sendCacheDataToReq;
+	sendCacheDataToDir;
+	popForwardQueue;
+	}
+
+	transition(MI_A, FwdGetM, II_A) {
+	sendCacheDataToReq;
+	popForwardQueue;
+	}
+
+	transition({MI_A, SI_A, II_A}, PutAck, I) {
+	deallocateCacheBlock;
+	popForwardQueue;
+	}
+
+	transition(SI_A, Inv, II_A) {
+	sendInvAcktoReq;
+	popForwardQueue;
+	}
+
+}

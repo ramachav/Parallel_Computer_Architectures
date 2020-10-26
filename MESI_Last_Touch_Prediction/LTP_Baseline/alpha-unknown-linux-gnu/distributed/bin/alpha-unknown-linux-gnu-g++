@@ -1,0 +1,2 @@
+#!/bin/sh
+distcc /opt/crosstool/gcc-3.4.3-glibc-2.3.5/alpha-unknown-linux-gnu/bin/alpha-unknown-linux-gnu-g++ "$@"

@@ -1,0 +1,272 @@
+File: README.pthreads
+Date: 1999/07/27, ernest@ac.upc.es (E.Artiaga)
+Last update: 1999/07/27, ernest@ac.upc.es (E.Artiaga)
+
+Description: Implementation of PARMACS macros using pthreads
+Barcelona (Spain), 1998,1999
+Copyright (c) 1998,1999 by GSOMK DAC-UPC. All Rights Reserved.
+GSOMK team at Department of Computer Architecture, UPC.
+gsomk@ac.upc.es
+
+Table of Contents:
+  1.- Copyright and license note
+  2.- Tuning the macros
+    2.1.- Compilation time definitions
+    2.2.- Environment variables
+    2.3.- Configuration file
+    2.4.- Description of symbols
+  3.- Building options
+    3.1.- Compiling the library
+    3.2.- Building the applications
+  4.- Tested environments
+    4.1.- Tested
+    4.2.- Reported to work
+  5.- Contact
+
+1.- Copyright and license note:
+==============================
+
+The Polytechnic University of Catalonia (UPC) and the authors disclaim
+all warranties with regard to this software, including all implied
+warranties of merchantability and fitness.
+In no event shall the Polytechnic University of Catalonia (UPC) or the
+authors be liable for any special, indirect or consequential damages or
+any damages whatsoever resulting from loss of use, data or profits,
+whether in an action of contract, negligence or other tortius action,
+arising out of or in connection with the use or performance of this
+software.
+
+Permission to use, copy, modify, and distribute this software for
+any purpose and without fee is hereby granted, provided that the above
+copyright notice and disclaimer, and also this permission notice, appear
+in all copies.
+
+2.- Tuning the macros:
+=====================
+
+The behavior of the macros can be tuned for a particular system or a
+particular application. There are three basic methods to configure the
+behavior of the parmacs macros:
+
+  - By defining constant macros at compilation time
+  - By setting environment variables at run time
+  - By creating a configuration file at run time
+  
+Usually, the run time options may override the compilation time
+configuration.
+
+2.1.- Compilation time definitions:
+----------------------------------
+
+The compilation time definitions are specified in the file parmacs_config.h.
+This file is used by the PARMACS library source files, but it is also 
+included in the application through the macros file. So, when modified, both
+the library and the application using the macros should be recompiled.
+
+The symbols defined in parmacs_config.h can be overriden by the compiler
+command-line options, such as -D... (e.g. cc ... -DPARMACS_MAX_LOCK=4096 ...).
+
+2.2.- Environment variables:
+---------------------------
+
+Once the application is compiled and linked, the configuration options
+defined at compilation time are treated as default options, which can
+be changed by setting the corresponding environment variables. The
+environment variables have exactly the same name than the symbols defined
+during compilation.
+
+2.3.- Configuration file:
+------------------------
+
+The configuration options can also be set through a configuration file.
+The name of the configuration file should be specified through an
+environment variable: PARMACS_CONFIG_FILE. Such file must be composed of
+lines of the form:
+
+SYMBOL = VALUE
+
+Blank lines, lines beginning by '#' and unrecognized symbols are ignored.
+The values specified in this file override those set by environment
+variables or defined at compilation time. Again, the symbol names are
+exactly the same than the symbols defined in parmacs_config.h.
+
+2.4.- Description of symbols:
+----------------------------
+
+PARMACS_SPIN_COUNT
+  type: integer value.
+  Desc: Number of loops to spin during a spin lock before trying to yield the
+        processor. A value of -1 means that the processor is never voluntarily
+        yielded. A value of 0 means that the processor is yielded every
+        loop. It only has effect if the library has been compiled with the
+        -DPARMACS_SPIN_LOCK option
+  Def.: The default value is 1.
+  Comm: this is currently used to implement parmacs lock operations and 
+        internal library locks.
+
+PARMACS_MAX_BARRIER
+  type: integer value.
+  Desc: Maximum number of variables of type barrier. Such variables are
+        located in a specific memory area allocated during initialization.
+  Def.: The default value is 128.
+
+PARMACS_MAX_GLOBAL
+  type: integer value.
+  Desc: Maximum number of variables of type global subscript, which are used
+        for self-scheduling loops. Such variables are located in a specific
+        memory area allocated during initialization.
+  Def.: The default value is 128.
+
+PARMACS_MAX_EVENT
+  type: integer value.
+  Desc: Maximum number of variables of type event (pause). Such variables
+        are located in a specific memory area allocated during initialization.
+        This number must take into account all the individual elements in an
+        array of parmacs events.
+  Def.: The default value is 128.
+
+PARMACS_MAX_LOCK
+  type: integer value.
+  Desc: Maximum number of variables of type lock. Such variables are
+        located in a specific memory area allocated during initialization.
+        This number must take into account all the individual elements in an
+        array of parmacs locks (ALOCK).
+  Def.: The default value is 128.
+
+PARMACS_PAGE_SIZE
+  type: integer value.
+  Desc: The size of a memory page in bytes. This symbol is not currently
+        used.
+  Def.: The default value is 4096.
+
+PARMACS_STACK_SIZE
+  type: integer value.
+  Desc: The size of a parmacs process stack in pages. The length of a page
+        is assumed to be PARMACS_PAGE_SIZE. This symbol is not currently
+        used in this implementation.
+  Def.: The default value is 8.
+
+PARMACS_SHARED_MEMORY
+  type: integer value.
+  Desc: The maximum amount of shared memory used by the application, in bytes.
+        This size does not include the memory needed for parmacs global
+        variables and internal data: it only affects the memory allocatable
+        via G_MALLOC. This option is provided only for compatibility, but it
+        is ignored by this implementation of Parmacs.
+  Def.: The default value is 16777216 (16MB).
+
+PARMACS_MEM_ALIGNMENT
+  type: integer value.
+  Desc: Memory alignment of addresses returned by G_MALLOC. It is expressed
+        in bytes.
+  Def.: The default value is 4.
+
+PARMACS_MAX_PROCESS
+  type: integer value.
+  Desc: Maximum number of parmacs processes. Each process has its own
+        information area, which are located in a specific memory area
+        allocated during initialization. Parmacs processes are implemented
+        using pthreads with shared address space. 
+  Def.: The default value is 128.
+  
+PARMACS_KERNEL_LIMIT
+  type: integer value.
+  Desc: Sets the concurrency level for pthreads. Note that this feature
+        is ignored by some implementations of pthreads.
+  Def.: The default value is 0.
+
+PARMACS_TIMESTAMP
+  type: integer value.
+  Desc: If set to non-zero, collect time stamps at the beginning and at
+        the end of the application, and print them on the standard error
+        when the application is finished. 
+  Def.: The default value is 0.
+  
+3.- Building options:
+=======================
+
+3.1.- Compiling the library:
+---------------------------
+
+Besides setting the symbol values described in the previous section, the
+following command line options may be used when compiling the library:
+
+-DPOSIX_1003_4a
+  Desc: This option enables compatibility with libraries implementing version
+        Posix 1003.4a of pthreads.
+        
+-D_POSIX_THREADS
+  Desc: This option is needed by some systems (such as OpenBSD) in order to
+        use pthreads
+        
+-D_MIT_POSIX_THREADS
+  Desc: Some linux distributions need this option in order to use pthreads.
+        
+-DPARMACS_SPIN_LOCK
+  Desc: This option makes the library use a kind of spin lock to implement
+        parmacs locks and some internal mutual exclusions. If not defined,
+        standard pthread mutexes are used. This option was include for
+        testing purposes and its usage is not recomended.
+       
+-DPARMACS_NO_SETCONCURRENCY
+  Desc: This option must be used if the available pthread library does not
+        provide the pthread_setconcurrency interface.
+
+-DPARMACS_MALLOC_NOT_REENTRANT
+  Desc: This option is necessary if malloc is not pthread-safe. Note that
+        this option protects only the library internal use of malloc, not
+        the application's malloc calls.
+
+-D_REENTRANT
+  Desc: this option is required by some systems to use thread-aware libraries.
+
+-Dpthread_key_create=pthread_keycreate
+  Desc: Some libraries use the old interface for pthread_key_create function.
+        If you have one of these, use this option to redefine the interface.
+        
+-O2 (+O2, etc. depending on the compiler)
+  Desc: An optimization level 2 (at least) is recomended when compiling the
+        library.
+        
+3.2.- Building applications:
+---------------------------
+
+Applications using the pthreads based parmacs library must be linked with
+the corresponding pthreads (and/or c_r) library.
+
+The following option may be required when compiling the application:
+
+-D_REENTRANT
+  Desc: this option is required by some systems to use thread-aware libraries.
+     
+        
+4.- Tested environments:
+=======================
+
+4.1.- Tested:
+------------
+
+The following is a list of environments where we have tested this
+implementation:
+
+  Hardware:                       System:
+  --------                        ------
+ 
+  * DEC alpha                     * OSF1 V4.0 1091
+  * HP 9000/809                   * HP-UX B.11.00 C
+  * Sun SparcStation-20           * SunOS 5.7
+
+4.2.- Reported to work:
+----------------------
+
+We would like to know if the macros work fine in other environments. We are
+interested in your feedback. If you want to contribute to this list, please
+send us information about the architecture and the system you are using to
+gsomk@ac.upc.es
+
+5.- Contact:
+===========
+
+If you need further information, or you want to send any comment about the
+Upc-Parmacs macros (including bug reports ;), please contact gsomk@ac.upc.es.
+

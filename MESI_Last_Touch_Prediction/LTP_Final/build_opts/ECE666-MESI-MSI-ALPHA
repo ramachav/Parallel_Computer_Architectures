@@ -1,0 +1,5 @@
+TARGET_ISA = 'alpha'
+SS_COMPATIBLE_FP = 1
+CPU_MODELS = 'AtomicSimpleCPU,O3CPU,TimingSimpleCPU,MinorCPU'
+PROTOCOL = 'MSI_Two_Level'
+SLICC_HTML = 1

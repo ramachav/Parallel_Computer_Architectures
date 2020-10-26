@@ -1,0 +1,37 @@
+CC := $(HOME)/ECE-66600-Homeworks-Projects/Homework_2/gem5_working_baseline/alpha-unknown-linux-gnu/bin/alpha-unknown-linux-gnu-gcc
+CFLAGS := -O3 -pthread -D_POSIX_C_SOURCE=200112
+#CFLAGS := -g3 -pthread -D_POSIX_C_SOURCE=200112
+CFLAGS := $(CFLAGS) -Wall -W -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls -Wdisabled-optimization
+CFLAGS := $(CFLAGS) -I$(HOME)/ECE-66600-Homeworks-Projects/Homework_2/gem5_working_baseline/alpha-unknown-linux-gnu/alpha-unknown-linux-gnu/sys-include
+CFLAGS := $(CFLAGS) -static -static-libgc
+CFLAGS := $(CFLAGS) -Wpadded -Winline -Wpointer-arith -Wsign-compare -Wendif-labels
+LDFLAGS := $(LDFLAGS) -L$(HOME)/ECE-66600-Homeworks-Projects/Homework_2/gem5_working_baseline/alpha-unknown-linux-gnu/alpha-unknown-linux-gnu/lib
+LDFLAGS := -lm
+
+BASEDIR := $(HOME)/ECE-66600-Homeworks-Projects/Homework_2/gem5_working_baseline/splash2/codes
+MACROS := $(BASEDIR)/null_macros/c.m4.null.POSIX
+M4 := m4 -s -Ulen -Uindex
+
+x = *
+
+$(TARGET): $(OBJS)
+	$(CC) $(OBJS) $(CFLAGS) -o $(TARGET) $(LDFLAGS)
+
+clean:
+	rm -rf *.c *.h *.o $(TARGET)
+
+.SUFFIXES:
+.SUFFIXES:	.o .c .C .h .H
+
+.H.h:
+	$(M4) $(MACROS) $*.H > $*.h
+
+.C.c:
+	$(M4) $(MACROS) $*.C > $*.c
+
+.c.o:
+	$(CC) -c $(CFLAGS) $*.c
+
+.C.o:
+	$(M4) $(MACROS) $*.C > $*.c
+	$(CC) -c $(CFLAGS) $*.c
